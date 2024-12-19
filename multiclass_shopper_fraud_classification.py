@@ -2,6 +2,7 @@ import os
 import time
 import numpy as np
 import pandas as pd
+import shap
 import matplotlib.pyplot as plt
 import seaborn as sns
 import lightgbm as lgb
@@ -20,7 +21,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from lightgbm import log_evaluation  # Removed early_stopping as we don't have a validation set
+from lightgbm import log_evaluation  
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -55,7 +56,6 @@ with open(private_key_path, "rb") as key_file:
         if os.getenv('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE') else None,
         backend=default_backend()
     )
-    # Convert the private key to the format required by Snowflake
     pkb = private_key.private_bytes(
         encoding=serialization.Encoding.DER,
         format=serialization.PrivateFormat.PKCS8,
@@ -74,18 +74,18 @@ engine = create_engine(
     }
 )
 
-# Define your SQL query
-# query = """
-# SELECT *
-# FROM SANDBOX_DB.AHMADSAJEDI.SHOPPER_FRAUD_CLASSIFICATION_AGG_M1
-# ORDER BY delivery_created_date_time_utc ASC
-# """
-
+# Define your SQL query for three datasets (up to 30K, up to 500K, up to 1.5M)
 query = """
 SELECT *
-FROM SANDBOX_DB.AHMADSAJEDI.SHOPPER_FRAUD_CLASSIFICATION_FULL_NONFRAUD_AGG_M1
+FROM SANDBOX_DB.AHMADSAJEDI.SHOPPER_FRAUD_CLASSIFICATION_AGG_M1
 ORDER BY delivery_created_date_time_utc ASC
 """
+
+# query = """
+# SELECT *
+# FROM SANDBOX_DB.AHMADSAJEDI.SHOPPER_FRAUD_CLASSIFICATION_FULL_NONFRAUD_AGG_M1
+# ORDER BY delivery_created_date_time_utc ASC
+# """
 
 # query = """
 # SELECT *
@@ -161,27 +161,6 @@ print(f"Data Splitting Time: {end_time - start_time:.2f} seconds")
 
 # ================== Model Training ==================
 # 1. the ebst hyperparameter for the model on SHOPPER_FRAUD_CLASSIFICATION_AGG_M1 (up to 30K)
-# best_params = {
-#     'objective': 'multiclass',
-#     'num_class': len(np.unique(y)),
-#     'metric': 'multi_logloss',
-#     'boosting_type': 'gbdt',
-#     'device': 'cpu',
-#     'is_unbalance': True,
-#     'verbose': -1,
-#     'learning_rate': 0.014673672445495577,
-#     'num_leaves': 128,
-#     'max_depth': 12,
-#     'min_data_in_leaf': 100,
-#     'feature_fraction': 0.6002933605844709,
-#     'bagging_fraction': 0.9019153707902258,
-#     'bagging_freq': 4,
-#     'lambda_l1': 5.084063300383103e-06,
-#     'lambda_l2': 0.015662588748170638,
-#     'min_gain_to_split': 0.9095436389736504
-# }
-
-# 2. the ebst hyperparameter for the model on SHOPPER_FRAUD_CLASSIFICATION_FULL_NONFRAUD_AGG_M1(up to 500K)
 best_params = {
     'objective': 'multiclass',
     'num_class': len(np.unique(y)),
@@ -190,17 +169,38 @@ best_params = {
     'device': 'cpu',
     'is_unbalance': True,
     'verbose': -1,
-    'learning_rate': 0.006732795304011321,
-    'num_leaves': 61,
+    'learning_rate': 0.014673672445495577,
+    'num_leaves': 128,
     'max_depth': 12,
-    'min_data_in_leaf': 30,
-    'feature_fraction': 0.7127518290986533,
-    'bagging_fraction': 0.7204684435174533,
-    'bagging_freq': 7,
-    'lambda_l1': 6.84680812174637e-06,
-    'lambda_l2': 0.5254075879024248,
-    'min_gain_to_split': 0.02618080955415214
+    'min_data_in_leaf': 100,
+    'feature_fraction': 0.6002933605844709,
+    'bagging_fraction': 0.9019153707902258,
+    'bagging_freq': 4,
+    'lambda_l1': 5.084063300383103e-06,
+    'lambda_l2': 0.015662588748170638,
+    'min_gain_to_split': 0.9095436389736504
 }
+
+# 2. the ebst hyperparameter for the model on SHOPPER_FRAUD_CLASSIFICATION_FULL_NONFRAUD_AGG_M1(up to 500K)
+# best_params = {
+#     'objective': 'multiclass',
+#     'num_class': len(np.unique(y)),
+#     'metric': 'multi_logloss',
+#     'boosting_type': 'gbdt',
+#     'device': 'cpu',
+#     'is_unbalance': True,
+#     'verbose': -1,
+#     'learning_rate': 0.006732795304011321,
+#     'num_leaves': 61,
+#     'max_depth': 12,
+#     'min_data_in_leaf': 30,
+#     'feature_fraction': 0.7127518290986533,
+#     'bagging_fraction': 0.7204684435174533,
+#     'bagging_freq': 7,
+#     'lambda_l1': 6.84680812174637e-06,
+#     'lambda_l2': 0.5254075879024248,
+#     'min_gain_to_split': 0.02618080955415214
+# }
 
 
 
@@ -480,6 +480,151 @@ y_pred_test = final_model.predict(X_test, num_iteration=final_model.best_iterati
 y_pred_labels_test = np.argmax(y_pred_test, axis=1)
 
 evaluate_model(y_test, y_pred_test, y_pred_labels_test, "Test")
+
+# ================== Feature Importance Analysis ==================
+
+print("\nPerforming Feature Importance Analysis...")
+
+def plot_feature_importance(model, feature_names, top_n=20):
+    """Basic feature importance plot using gain"""
+    # Get feature importance
+    importance = model.feature_importance(importance_type='gain')
+    
+    # Create DataFrame with feature names and importance
+    feature_imp = pd.DataFrame({
+        'Feature': feature_names,
+        'Importance': importance
+    }).sort_values(by='Importance', ascending=False)
+    
+    # Plot top N features
+    plt.figure(figsize=(12, 8))
+    sns.barplot(x='Importance', y='Feature', data=feature_imp.head(top_n))
+    plt.title(f'Top {top_n} Feature Importance (Gain)')
+    plt.xlabel('Importance (Gain)')
+    plt.ylabel('Features')
+    plt.tight_layout()
+    plt.savefig('feature_importance_gain.png')
+    plt.close()
+    
+    return feature_imp
+
+def analyze_feature_importance(model, feature_names):
+    """Analyze different types of feature importance"""
+    importance_types = ['gain', 'split'] 
+    importance_dict = {}
+    
+    for imp_type in importance_types:
+        importance = model.feature_importance(importance_type=imp_type)
+        importance_dict[imp_type] = pd.DataFrame({
+            'Feature': feature_names,
+            'Importance': importance
+        }).sort_values(by='Importance', ascending=False)
+    
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6)) 
+    
+    for ax, (imp_type, imp_df) in zip(axes, importance_dict.items()):
+        sns.barplot(x='Importance', y='Feature', 
+                   data=imp_df.head(10), ax=ax)
+        ax.set_title(f'Top 10 Features ({imp_type})')
+        ax.set_xlabel(f'Importance ({imp_type})')
+        ax.set_ylabel('Features')
+    
+    plt.tight_layout()
+    plt.savefig('feature_importance_comparison.png')
+    plt.close()
+    
+    return importance_dict
+
+def analyze_shap_values(model, X_data, feature_names, max_display=20):
+    """Calculate and plot SHAP values"""
+    # Calculate SHAP values
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_data)
+    
+    # Plot summary for each class
+    if isinstance(shap_values, list):  # For multi-class
+        for i, class_shap in enumerate(shap_values):
+            plt.figure(figsize=(12, 8))
+            shap.summary_plot(class_shap, X_data, feature_names=feature_names,
+                            max_display=max_display, show=False)
+            plt.title(f'SHAP Values for Class {target_encoder.inverse_transform([i])[0]}')
+            plt.tight_layout()
+            plt.savefig(f'shap_summary_class_{i}.png')
+            plt.close()
+    
+    return shap_values
+
+def analyze_feature_stability(model, X_train, X_test):
+    """Analyze feature importance stability between train and test sets"""
+    train_imp = pd.DataFrame({
+        'Feature': X_train.columns,
+        'Train_Importance': model.feature_importance(importance_type='gain')
+    })
+    
+    test_imp = pd.DataFrame({
+        'Feature': X_test.columns,
+        'Test_Importance': model.feature_importance(importance_type='gain')
+    })
+    
+    # Merge and calculate stability metrics
+    stability = train_imp.merge(test_imp, on='Feature')
+    stability['Importance_Diff'] = abs(
+        stability['Train_Importance'] - stability['Test_Importance']
+    )
+    stability['Importance_Ratio'] = (
+        stability['Train_Importance'] / 
+        stability['Test_Importance'].replace(0, 1e-10)
+    )
+    
+    return stability.sort_values('Train_Importance', ascending=False)
+
+def comprehensive_feature_analysis(model, X_train, X_test):
+    """Perform comprehensive feature importance analysis"""
+    feature_names = X_train.columns
+    results = {}
+    
+    # 1. Basic Feature Importance
+    print("\nCalculating basic feature importance...")
+    results['basic_importance'] = plot_feature_importance(model, feature_names)
+    
+    # 2. Multiple Importance Types
+    print("Analyzing different importance metrics...")
+    results['detailed_importance'] = analyze_feature_importance(model, feature_names)
+    
+    # 3. SHAP Analysis
+    print("Calculating SHAP values...")
+    # Use a sample of data for SHAP analysis if dataset is large
+    sample_size = min(1000, len(X_test))
+    X_sample = X_test.sample(sample_size, random_state=42)
+    results['shap_values'] = analyze_shap_values(model, X_sample, feature_names)
+    
+    # 4. Feature Stability Analysis
+    print("Analyzing feature stability...")
+    results['stability_scores'] = analyze_feature_stability(model, X_train, X_test)
+    
+    return results
+
+# Perform the comprehensive analysis
+feature_analysis = comprehensive_feature_analysis(final_model, X_train, X_test)
+
+# Print and save results
+print("\nTop 20 Most Important Features (by Gain):")
+print(feature_analysis['basic_importance'].head(20))
+
+print("\nFeatures with Largest Train/Test Differences:")
+stability_df = feature_analysis['stability_scores']
+print(stability_df.sort_values('Importance_Diff', ascending=False).head(10))
+
+# Save detailed results to CSV
+feature_analysis['basic_importance'].to_csv('feature_importance_gain.csv')
+feature_analysis['stability_scores'].to_csv('feature_stability.csv')
+
+# Save importance results for each metric type
+for imp_type, imp_df in feature_analysis['detailed_importance'].items():
+    imp_df.to_csv(f'feature_importance_{imp_type}.csv')
+
+print("\nFeature importance analysis completed. Results saved to CSV files and plots.")
 
 # ================== Learning Curves ==================
 
