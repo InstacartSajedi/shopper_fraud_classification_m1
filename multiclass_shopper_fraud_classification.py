@@ -481,150 +481,339 @@ y_pred_labels_test = np.argmax(y_pred_test, axis=1)
 
 evaluate_model(y_test, y_pred_test, y_pred_labels_test, "Test")
 
-# ================== Feature Importance Analysis ==================
+# ================== Comprehensive Feature Importance Analysis ==================
 
-print("\nPerforming Feature Importance Analysis...")
-
-def plot_feature_importance(model, feature_names, top_n=20):
-    """Basic feature importance plot using gain"""
-    # Get feature importance
-    importance = model.feature_importance(importance_type='gain')
+def comprehensive_feature_analysis(model, X_train, X_test, output_dir='feature_importance'):
+    """
+    Perform comprehensive feature importance analysis including:
+    - Basic LightGBM feature importance (gain, split)
+    - SHAP values
+    - Feature stability analysis
+    """
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    feature_names = X_train.columns
+    results = {}
     
-    # Create DataFrame with feature names and importance
-    feature_imp = pd.DataFrame({
-        'Feature': feature_names,
-        'Importance': importance
-    }).sort_values(by='Importance', ascending=False)
+    print("\nPerforming comprehensive feature importance analysis...")
     
-    # Plot top N features
-    plt.figure(figsize=(12, 8))
-    sns.barplot(x='Importance', y='Feature', data=feature_imp.head(top_n))
-    plt.title(f'Top {top_n} Feature Importance (Gain)')
-    plt.xlabel('Importance (Gain)')
-    plt.ylabel('Features')
-    plt.tight_layout()
-    plt.savefig('feature_importance_gain.png')
-    plt.close()
-    
-    return feature_imp
-
-def analyze_feature_importance(model, feature_names):
-    """Analyze different types of feature importance"""
-    importance_types = ['gain', 'split'] 
-    importance_dict = {}
-    
+    # 1. LightGBM Built-in Feature Importance
+    importance_types = ['gain', 'split']
     for imp_type in importance_types:
         importance = model.feature_importance(importance_type=imp_type)
-        importance_dict[imp_type] = pd.DataFrame({
+        importance_df = pd.DataFrame({
             'Feature': feature_names,
-            'Importance': importance
-        }).sort_values(by='Importance', ascending=False)
+            f'Importance_{imp_type}': importance
+        }).sort_values(f'Importance_{imp_type}', ascending=False)
+        
+        # Save to CSV
+        importance_df.to_csv(f'{output_dir}/feature_importance_{imp_type}.csv', index=False)
+        
+        # Plot
+        plt.figure(figsize=(12, 8))
+        plt.barh(importance_df['Feature'].head(20), 
+                importance_df[f'Importance_{imp_type}'].head(20))
+        plt.title(f'Top 20 Features by {imp_type.capitalize()} Importance')
+        plt.xlabel(f'Importance ({imp_type})')
+        plt.tight_layout()
+        plt.savefig(f'{output_dir}/feature_importance_{imp_type}.png')
+        plt.close()
+        
+        results[f'importance_{imp_type}'] = importance_df
     
-
-    fig, axes = plt.subplots(1, 2, figsize=(15, 6)) 
+    # 2. SHAP Analysis
+    print("\nCalculating SHAP values...")
     
-    for ax, (imp_type, imp_df) in zip(axes, importance_dict.items()):
-        sns.barplot(x='Importance', y='Feature', 
-                   data=imp_df.head(10), ax=ax)
-        ax.set_title(f'Top 10 Features ({imp_type})')
-        ax.set_xlabel(f'Importance ({imp_type})')
-        ax.set_ylabel('Features')
-    
-    plt.tight_layout()
-    plt.savefig('feature_importance_comparison.png')
-    plt.close()
-    
-    return importance_dict
-
-def analyze_shap_values(model, X_data, feature_names, max_display=20):
-    """Calculate and plot SHAP values"""
-    # Calculate SHAP values
+    # Calculate SHAP values directly on the test set
     explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X_data)
-    
-    # Plot summary for each class
-    if isinstance(shap_values, list):  # For multi-class
-        for i, class_shap in enumerate(shap_values):
-            plt.figure(figsize=(12, 8))
-            shap.summary_plot(class_shap, X_data, feature_names=feature_names,
-                            max_display=max_display, show=False)
-            plt.title(f'SHAP Values for Class {target_encoder.inverse_transform([i])[0]}')
-            plt.tight_layout()
-            plt.savefig(f'shap_summary_class_{i}.png')
-            plt.close()
-    
-    return shap_values
+    shap_values = explainer.shap_values(X_test)
 
-def analyze_feature_stability(model, X_train, X_test):
-    """Analyze feature importance stability between train and test sets"""
+    # Visualize SHAP values for each class
+    for i in range(len(shap_values)):
+        plt.figure()
+        shap.summary_plot(shap_values[i], X_test, title=f'SHAP Values for Class {target_encoder.classes_[i]}')
+        plt.savefig(f'shap_summary_class_{target_encoder.classes_[i]}.png')  # Save the plot
+        plt.close()
+
+    print("SHAP values calculated and visualized for each class.")
+
+    # Process SHAP values for each class
+    # for i, class_shap in enumerate(shap_values):
+    #     class_name = target_encoder.inverse_transform([i])[0]
+
+    #     # Bar plot
+    #     plt.figure(figsize=(12, 8))
+    #     shap.summary_plot(
+    #         class_shap,
+    #         X_test,  # Use X_test directly
+    #         feature_names=list(X_test.columns),
+    #         max_display=20,
+    #         show=False,
+    #         plot_type="bar"
+    #     )
+    #     plt.title(f'SHAP Feature Importance - Class: {class_name}')
+    #     plt.tight_layout()
+    #     plt.savefig(f'{output_dir}/shap_importance_bar_class_{i}.png')
+    #     plt.close()
+
+    #     # Beeswarm plot
+    #     plt.figure(figsize=(12, 8))
+    #     shap.summary_plot(
+    #         class_shap,
+    #         X_test,  # Use X_test directly
+    #         feature_names=list(X_test.columns),
+    #         max_display=20,
+    #         show=False
+    #     )
+    #     plt.title(f'SHAP Summary - Class: {class_name}')
+    #     plt.tight_layout()
+    #     plt.savefig(f'{output_dir}/shap_summary_beeswarm_class_{i}.png')
+    #     plt.close()
+        
+    #     # Calculate mean absolute SHAP values
+    #     mean_abs_shap = np.abs(class_shap).mean(axis=0)
+    #     shap_importance = pd.DataFrame({
+    #         'Feature': feature_names,
+    #         'Mean |SHAP|': mean_abs_shap
+    #     }).sort_values('Mean |SHAP|', ascending=False)
+        
+    #     shap_importance.to_csv(f'{output_dir}/shap_importance_class_{i}.csv', index=False)
+    #     results[f'shap_class_{i}'] = shap_importance
+    
+    # 3. Feature Stability Analysis
+    print("\nAnalyzing feature stability...")
     train_imp = pd.DataFrame({
-        'Feature': X_train.columns,
+        'Feature': feature_names,
         'Train_Importance': model.feature_importance(importance_type='gain')
     })
     
     test_imp = pd.DataFrame({
-        'Feature': X_test.columns,
+        'Feature': feature_names,
         'Test_Importance': model.feature_importance(importance_type='gain')
     })
     
-    # Merge and calculate stability metrics
     stability = train_imp.merge(test_imp, on='Feature')
-    stability['Importance_Diff'] = abs(
-        stability['Train_Importance'] - stability['Test_Importance']
-    )
-    stability['Importance_Ratio'] = (
-        stability['Train_Importance'] / 
-        stability['Test_Importance'].replace(0, 1e-10)
-    )
+    stability['Importance_Diff'] = abs(stability['Train_Importance'] - stability['Test_Importance'])
+    stability['Importance_Ratio'] = stability['Train_Importance'] / stability['Test_Importance'].replace(0, 1e-10)
     
-    return stability.sort_values('Train_Importance', ascending=False)
-
-def comprehensive_feature_analysis(model, X_train, X_test):
-    """Perform comprehensive feature importance analysis"""
-    feature_names = X_train.columns
-    results = {}
+    stability = stability.sort_values('Train_Importance', ascending=False)
+    stability.to_csv(f'{output_dir}/feature_stability.csv', index=False)
+    results['stability'] = stability
     
-    # 1. Basic Feature Importance
-    print("\nCalculating basic feature importance...")
-    results['basic_importance'] = plot_feature_importance(model, feature_names)
+    # 4. Create Combined Feature Importance DataFrame
+    combined_importance = pd.DataFrame({'Feature': feature_names})
     
-    # 2. Multiple Importance Types
-    print("Analyzing different importance metrics...")
-    results['detailed_importance'] = analyze_feature_importance(model, feature_names)
+    # Add different importance metrics
+    for imp_type in importance_types:
+        combined_importance[f'Importance_{imp_type}'] = results[f'importance_{imp_type}'][f'Importance_{imp_type}']
     
-    # 3. SHAP Analysis
-    print("Calculating SHAP values...")
-    # Use a sample of data for SHAP analysis if dataset is large
-    sample_size = min(1000, len(X_test))
-    X_sample = X_test.sample(sample_size, random_state=42)
-    results['shap_values'] = analyze_shap_values(model, X_sample, feature_names)
+    # Add SHAP values for each class
+    for i in range(len(shap_values)):
+        class_name = target_encoder.inverse_transform([i])[0]
+        combined_importance[f'SHAP_{class_name}'] = results[f'shap_class_{i}']['Mean |SHAP|']
     
-    # 4. Feature Stability Analysis
-    print("Analyzing feature stability...")
-    results['stability_scores'] = analyze_feature_stability(model, X_train, X_test)
+    # Add stability metrics
+    combined_importance['Train_Test_Diff'] = stability['Importance_Diff']
+    combined_importance['Train_Test_Ratio'] = stability['Importance_Ratio']
+    
+    # Sort by average rank across all metrics
+    rank_columns = combined_importance.columns[1:]  # exclude 'Feature' column
+    for col in rank_columns:
+        combined_importance[f'{col}_rank'] = combined_importance[col].rank(ascending=False)
+    
+    avg_rank = combined_importance[[col for col in combined_importance.columns if col.endswith('_rank')]].mean(axis=1)
+    combined_importance['Average_Rank'] = avg_rank
+    combined_importance = combined_importance.sort_values('Average_Rank')
+    
+    # Save combined results
+    combined_importance.to_csv(f'{output_dir}/combined_feature_importance.csv', index=False)
+    results['combined'] = combined_importance
+    
+    # Create summary report
+    with open(f'{output_dir}/feature_importance_summary.txt', 'w') as f:
+        f.write("Feature Importance Analysis Summary\n")
+        f.write("=================================\n\n")
+        
+        f.write("Top 20 Features by Combined Ranking:\n")
+        f.write(combined_importance.head(20).to_string())
+        f.write("\n\n")
+        
+        for imp_type in importance_types:
+            f.write(f"\nTop 20 Features by {imp_type.capitalize()} Importance:\n")
+            f.write(results[f'importance_{imp_type}'].head(20).to_string())
+            f.write("\n\n")
+        
+        f.write("\nFeature Stability Analysis (Top 20):\n")
+        f.write(stability.head(20).to_string())
+    
+    print("\nFeature importance analysis completed. Results saved to:")
+    print(f"- {output_dir}/")
+    print("  ├── feature_importance_[gain/split].csv")
+    print("  ├── feature_importance_[gain/split].png")
+    print("  ├── shap_importance_bar_class_*.png")
+    print("  ├── shap_summary_beeswarm_class_*.png")
+    print("  ├── shap_importance_class_*.csv")
+    print("  ├── feature_stability.csv")
+    print("  └── combined_feature_importance.csv")
     
     return results
 
-# Perform the comprehensive analysis
-feature_analysis = comprehensive_feature_analysis(final_model, X_train, X_test)
+# Execute the comprehensive feature analysis
+feature_analysis_results = comprehensive_feature_analysis(
+    model=final_model,
+    X_train=X_train,
+    X_test=X_test,
+    output_dir='feature_importance_analysis'
+)
 
-# Print and save results
-print("\nTop 20 Most Important Features (by Gain):")
-print(feature_analysis['basic_importance'].head(20))
+# Print top 20 features from combined analysis
+print("\nTop 20 Features by Combined Importance Ranking:")
+print(feature_analysis_results['combined'][['Feature', 'Average_Rank']].head(20))
 
-print("\nFeatures with Largest Train/Test Differences:")
-stability_df = feature_analysis['stability_scores']
-print(stability_df.sort_values('Importance_Diff', ascending=False).head(10))
+# # ================== Feature Importance Analysis ==================
 
-# Save detailed results to CSV
-feature_analysis['basic_importance'].to_csv('feature_importance_gain.csv')
-feature_analysis['stability_scores'].to_csv('feature_stability.csv')
+# print("\nPerforming Feature Importance Analysis...")
 
-# Save importance results for each metric type
-for imp_type, imp_df in feature_analysis['detailed_importance'].items():
-    imp_df.to_csv(f'feature_importance_{imp_type}.csv')
+# def plot_feature_importance(model, feature_names, top_n=20):
+#     """Basic feature importance plot using gain"""
+#     # Get feature importance
+#     importance = model.feature_importance(importance_type='gain')
+    
+#     # Create DataFrame with feature names and importance
+#     feature_imp = pd.DataFrame({
+#         'Feature': feature_names,
+#         'Importance': importance
+#     }).sort_values(by='Importance', ascending=False)
+    
+#     # Plot top N features
+#     plt.figure(figsize=(12, 8))
+#     sns.barplot(x='Importance', y='Feature', data=feature_imp.head(top_n))
+#     plt.title(f'Top {top_n} Feature Importance (Gain)')
+#     plt.xlabel('Importance (Gain)')
+#     plt.ylabel('Features')
+#     plt.tight_layout()
+#     plt.savefig('feature_importance_gain.png')
+#     plt.close()
+    
+#     return feature_imp
 
-print("\nFeature importance analysis completed. Results saved to CSV files and plots.")
+# def analyze_feature_importance(model, feature_names):
+#     """Analyze different types of feature importance"""
+#     importance_types = ['gain', 'split'] 
+#     importance_dict = {}
+    
+#     for imp_type in importance_types:
+#         importance = model.feature_importance(importance_type=imp_type)
+#         importance_dict[imp_type] = pd.DataFrame({
+#             'Feature': feature_names,
+#             'Importance': importance
+#         }).sort_values(by='Importance', ascending=False)
+    
+
+#     fig, axes = plt.subplots(1, 2, figsize=(15, 6)) 
+    
+#     for ax, (imp_type, imp_df) in zip(axes, importance_dict.items()):
+#         sns.barplot(x='Importance', y='Feature', 
+#                    data=imp_df.head(10), ax=ax)
+#         ax.set_title(f'Top 10 Features ({imp_type})')
+#         ax.set_xlabel(f'Importance ({imp_type})')
+#         ax.set_ylabel('Features')
+    
+#     plt.tight_layout()
+#     plt.savefig('feature_importance_comparison.png')
+#     plt.close()
+    
+#     return importance_dict
+
+# def analyze_shap_values(model, X_data, feature_names, max_display=20):
+#     """Calculate and plot SHAP values"""
+#     # Calculate SHAP values
+#     explainer = shap.TreeExplainer(model)
+#     shap_values = explainer.shap_values(X_data)
+    
+#     # Plot summary for each class
+#     if isinstance(shap_values, list):  # For multi-class
+#         for i, class_shap in enumerate(shap_values):
+#             plt.figure(figsize=(12, 8))
+#             shap.summary_plot(class_shap, X_data, feature_names=feature_names,
+#                             max_display=max_display, show=False)
+#             plt.title(f'SHAP Values for Class {target_encoder.inverse_transform([i])[0]}')
+#             plt.tight_layout()
+#             plt.savefig(f'shap_summary_class_{i}.png')
+#             plt.close()
+    
+#     return shap_values
+
+# def analyze_feature_stability(model, X_train, X_test):
+#     """Analyze feature importance stability between train and test sets"""
+#     train_imp = pd.DataFrame({
+#         'Feature': X_train.columns,
+#         'Train_Importance': model.feature_importance(importance_type='gain')
+#     })
+    
+#     test_imp = pd.DataFrame({
+#         'Feature': X_test.columns,
+#         'Test_Importance': model.feature_importance(importance_type='gain')
+#     })
+    
+#     # Merge and calculate stability metrics
+#     stability = train_imp.merge(test_imp, on='Feature')
+#     stability['Importance_Diff'] = abs(
+#         stability['Train_Importance'] - stability['Test_Importance']
+#     )
+#     stability['Importance_Ratio'] = (
+#         stability['Train_Importance'] / 
+#         stability['Test_Importance'].replace(0, 1e-10)
+#     )
+    
+#     return stability.sort_values('Train_Importance', ascending=False)
+
+# def comprehensive_feature_analysis(model, X_train, X_test):
+#     """Perform comprehensive feature importance analysis"""
+#     feature_names = X_train.columns
+#     results = {}
+    
+#     # 1. Basic Feature Importance
+#     print("\nCalculating basic feature importance...")
+#     results['basic_importance'] = plot_feature_importance(model, feature_names)
+    
+#     # 2. Multiple Importance Types
+#     print("Analyzing different importance metrics...")
+#     results['detailed_importance'] = analyze_feature_importance(model, feature_names)
+    
+#     # 3. SHAP Analysis
+#     print("Calculating SHAP values...")
+#     # Use a sample of data for SHAP analysis if dataset is large
+#     sample_size = min(1000, len(X_test))
+#     X_sample = X_test.sample(sample_size, random_state=42)
+#     results['shap_values'] = analyze_shap_values(model, X_sample, feature_names)
+    
+#     # 4. Feature Stability Analysis
+#     print("Analyzing feature stability...")
+#     results['stability_scores'] = analyze_feature_stability(model, X_train, X_test)
+    
+#     return results
+
+# # Perform the comprehensive analysis
+# feature_analysis = comprehensive_feature_analysis(final_model, X_train, X_test)
+
+# # Print and save results
+# print("\nTop 20 Most Important Features (by Gain):")
+# print(feature_analysis['basic_importance'].head(20))
+
+# print("\nFeatures with Largest Train/Test Differences:")
+# stability_df = feature_analysis['stability_scores']
+# print(stability_df.sort_values('Importance_Diff', ascending=False).head(10))
+
+# # Save detailed results to CSV
+# feature_analysis['basic_importance'].to_csv('feature_importance_gain.csv')
+# feature_analysis['stability_scores'].to_csv('feature_stability.csv')
+
+# # Save importance results for each metric type
+# for imp_type, imp_df in feature_analysis['detailed_importance'].items():
+#     imp_df.to_csv(f'feature_importance_{imp_type}.csv')
+
+# print("\nFeature importance analysis completed. Results saved to CSV files and plots.")
 
 # ================== Learning Curves ==================
 
